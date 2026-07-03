@@ -1,0 +1,21 @@
+# Unreal Engine 프로젝트 — 산출물/캐시 제외 (Source·Config·Content·Plugins 소스만 버전관리)
+Binaries/
+Build/
+DerivedDataCache/
+Intermediate/
+Saved/
+
+# Visual Studio / 프로젝트 파일 (재생성됨)
+.vs/
+.vsconfig
+*.sln
+*.slnx
+*.suo
+*.VC.db
+*.opensdf
+*.opendb
+*.sdf
+
+# OS
+Thumbs.db
+Desktop.ini
