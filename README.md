@@ -22,6 +22,7 @@
 - [설정 (config)](#설정-config)
 - [왜 standalone 은 검은 화면인가](#왜-standalone-은-검은-화면인가)
 - [플러그인 업데이트 (submodule 동기화)](#플러그인-업데이트-submodule-동기화)
+- [풀빌드 (전체 재빌드)](#풀빌드-전체-재빌드)
 - [트러블슈팅](#트러블슈팅)
 
 ## 무엇인가
@@ -51,13 +52,6 @@ baroQuantum/
 └─ _forAI/                     # AI 작업 인수용 문서 세트
 ```
 
-3-리포 관계 (모두 `C:\works\ue_prjs\`):
-
-| 리포 | 역할 | 플러그인 |
-|---|---|---|
-| `baroCCTVSimulator` | CCTV 시뮬 C++ **유일 소스** | (본체) |
-| **`baroQuantum`** | **팀 공유·데모용 경량 프레임워크** | submodule 소비 |
-| `baro_unreal` | 실사 개발용(30GB) | submodule 소비 |
 
 ## 요구 사항
 
@@ -179,17 +173,110 @@ GlobalDefaultGameMode=/Script/baroCCTVSimulator.BaroSimGameMode
 
 ## 플러그인 업데이트 (submodule 동기화)
 
-CCTV 시뮬 C++ 는 `baroCCTVSimulator` 리포에서만 고친다. 이 프로젝트는 포인터만 갱신:
+CCTV 시뮬 C++ 는 `baroCCTVSimulator` 리포에서만 고친다. 이 프로젝트는 그 플러그인의 **특정 커밋 하나에
+핀(pin) 고정**된 상태로 소비한다(서브모듈의 gitlink). 그래서 플러그인을 버전업해도 baroQuantum 이
+**자동으로 최신을 따라가지 않는다** — 중간에 "핀을 올리는" 명시적 단계가 필요하다.
+
+> **핵심**: `git pull` 한 방으로는 최신 플러그인이 안 붙는다. 상황을 A/B 로 나눠서 본다.
+
+### 상황 A — 내가 플러그인을 버전업하고 최신으로 올릴 때
+
+플러그인 쪽에서 먼저 커밋·push:
 
 ```bash
-# 최신 플러그인으로 당겨오기
-git submodule update --remote Plugins/baroCCTVSimulator
-
-# 반대로, 특정 커밋으로 고정된 걸 그대로 받기
-git submodule update --init --recursive
+cd ../baroCCTVSimulator
+# ...C++/에셋 수정...
+git commit -am "feat: 개선"
+git push
 ```
 
-플러그인 C++ 가 바뀌면 **에디터를 닫고** 프로젝트를 리빌드한다(Live Coding 으로는 모듈 교체 불가).
+그다음 baroQuantum 에서 **핀을 최신으로 올리고 그 사실을 커밋**한다:
+
+```bash
+cd ../baroQuantum
+git submodule update --remote Plugins/baroCCTVSimulator   # 플러그인 origin/main 최신을 받아 체크아웃
+git add Plugins/baroCCTVSimulator
+git commit -m "chore: baroCCTVSimulator 최신으로 갱신"
+git push
+```
+
+> `--remote` 가 핵심. "핀 무시하고 브랜치(main) 최신으로 당겨라"는 뜻이다. 이 커밋이 새 핀을 기록한다.
+
+### 상황 B — 남(또는 다른 PC)이 A 를 해서 올린 핀을 받을 때
+
+`pull` + **서브모듈 체크아웃** 2단계다:
+
+```bash
+git pull                                  # baroQuantum 의 새 핀(포인터)을 받음
+git submodule update --init --recursive   # 플러그인을 그 핀 커밋으로 체크아웃 ← 빠지면 옛 파일 그대로
+```
+
+### pull 한 방으로 끝내고 싶으면 (편의 설정)
+
+한 번만 설정하면 이후 `pull`/`checkout` 이 서브모듈까지 자동으로 따라온다:
+
+```bash
+git config submodule.recurse true         # 이후 pull/checkout 이 서브모듈 자동 update
+# 또는 매번:  git pull --recurse-submodules
+```
+
+단, 이건 **상황 B**(올라간 핀 받기)만 자동화한다. **상황 A 의 "핀 올리기+커밋"은 여전히 수동**이다
+— 어느 플러그인 버전에 고정할지는 프로젝트가 결정하는 git 의 의도된 명시적 단계다.
+
+### ⚠️ 받은 뒤 — UE 리빌드
+
+플러그인 **C++ 가 바뀐 버전**을 받았으면 파일 갱신만으로 끝이 아니다. **에디터를 닫고** 프로젝트를
+리빌드해야 반영된다(Live Coding 으로는 모듈 핫스왑 불가). 에셋/콘텐츠만 바뀐 버전이면 리빌드 없이
+에디터 재시작만으로 된다. → 절차는 아래 [풀빌드 (전체 재빌드)](#풀빌드-전체-재빌드).
+
+## 풀빌드 (전체 재빌드)
+
+**언제 필요한가**: ① 처음 셋업 때, ② 플러그인 C++ 를 새로 받았을 때, ③ `.uproject` 열 때 "모듈이
+오래됨" 프롬프트가 뜰 때.
+
+> **에디터 안의 컴파일 버튼(Live Coding)으로 때우지 말 것.** Live Coding 은 함수 본문 정도만 반영하고
+> **헤더/구조 변경(UPROPERTY 추가, 새 클래스, WorldSubsystem 등)은 놓친다** — "성공"이라 떠도 옛 코드가
+> 돌 수 있다. 플러그인 버전업 뒤엔 반드시 아래 풀빌드로 간다.
+
+### 0단계 (필수) — 에디터를 완전히 닫는다
+
+에디터가 열려 있으면 DLL 이 잠겨 빌드가 실패하거나 반쪽만 적용된다. **먼저 언리얼 에디터를 종료**한다.
+
+### 1단계 (파일이 추가/삭제된 버전일 때만) — 프로젝트 파일 재생성
+
+플러그인에 새 `.cpp/.h` 가 생겼거나 지워졌으면, 빌드 전에 한 번:
+
+- `baroQuantum.uproject` **우클릭 → "Generate Visual Studio project files"**
+
+(기존 파일 내용만 바뀐 버전이면 이 단계는 건너뛴다.)
+
+### 2단계 — 셋 중 하나로 빌드
+
+**방법 A. Visual Studio (가장 무난)**
+
+1. `baroQuantum.sln` 을 연다 (`Automation_...` 말고)
+2. 상단 구성 드롭다운을 **`Development Editor`** / **`Win64`** 로 맞춘다
+3. **Build → Build Solution** (`Ctrl+Shift+B`)
+   - 더 빠르게: 솔루션 탐색기에서 **`baroQuantum` 프로젝트 우클릭 → Build**
+
+**방법 B. .uproject 리빌드 프롬프트 (가장 간단)**
+
+- `baroQuantum.uproject` 더블클릭 → "모듈이 오래됨, 다시 빌드?" → **예**
+- 빌드가 끝나면 에디터가 자동으로 열린다
+
+**방법 C. 명령줄 (VS 없이 / 자동화용)**
+
+```bat
+"<UE_5.8 설치 경로>\Engine\Build\BatchFiles\Build.bat" baroQuantumEditor Win64 Development -Project="baroQuantum.uproject" -WaitMutex
+```
+
+- `baroQuantumEditor` = 빌드 타깃, `Win64` = 플랫폼, `Development` = 구성
+- 엔진 설치 경로는 각자 환경에 맞게 
+
+### 증상이 이상하면 — 완전 클린 빌드
+
+빌드가 꼬였을 때만: 에디터 닫고 프로젝트의 **`Binaries/` 와 `Intermediate/` 폴더를 삭제** → 1단계(재생성)
+→ 2단계(빌드). 둘 다 git 에서 제외돼 재생성되므로 지워도 안전하다.
 
 ## 트러블슈팅
 
